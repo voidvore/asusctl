@@ -267,17 +267,12 @@ impl Device {
         }
     }
 
-    /// Probe this device's hwmon directories with `read`, falling back to
-    /// `nvml` on NVIDIA hardware whose proprietary driver registers no hwmon.
+    /// Read the temperature (°C) of this GPU from sysfs hwmon with NVML fallback.
     ///
     /// If this is a discrete GPU and it is not in the `Active` power state,
     /// this immediately returns `None` without accessing hwmon or NVML to prevent
     /// waking the PCIe device from runtime PM sleep.
-    fn probe_hwmon(
-        &self,
-        read: fn(&Path) -> Option<f32>,
-        nvml: fn() -> Option<f32>,
-    ) -> Option<f32> {
+    pub fn get_temp(&self) -> Option<f32> {
         if self.is_dgpu
             && self.get_runtime_status().unwrap_or(GfxPower::Unknown) != GfxPower::Active
         {
@@ -287,8 +282,8 @@ impl Device {
         // 1. Direct hwmon directory under device path
         if let Ok(entries) = fs::read_dir(self.dev_path.join("hwmon")) {
             for entry in entries.flatten() {
-                if let Some(value) = read(&entry.path()) {
-                    return Some(value);
+                if let Some(temp) = read_hwmon_temp(&entry.path()) {
+                    return Some(temp);
                 }
             }
         }
@@ -304,8 +299,8 @@ impl Device {
                     .ok()
                     .is_some_and(|p| p == self.dev_path || p.starts_with(&self.dev_path));
                 if is_match {
-                    if let Some(value) = read(&path) {
-                        return Some(value);
+                    if let Some(temp) = read_hwmon_temp(&path) {
+                        return Some(temp);
                     }
                 }
             }
@@ -313,15 +308,12 @@ impl Device {
 
         // 3. Fallback to NVML if this is an NVIDIA device and hwmon is not available
         if self.pci_id.to_uppercase().starts_with(NVIDIA_PCI_VENDOR) {
-            return nvml();
+            if let Some(temp) = read_nvml_temp() {
+                return Some(temp);
+            }
         }
 
         None
-    }
-
-    /// Read the temperature (°C) of this GPU from sysfs hwmon with NVML fallback.
-    pub fn get_temp(&self) -> Option<f32> {
-        self.probe_hwmon(read_hwmon_temp, read_nvml_temp)
     }
 
     /// Read the GPU utilization percentage (0.0 - 100.0) from sysfs DRM nodes with NVML fallback.
@@ -380,8 +372,52 @@ impl Device {
 
     /// Read the current graphics clock (MHz) of this GPU from sysfs hwmon with
     /// NVML fallback.
+    ///
+    /// If this is a discrete GPU and it is not in the `Active` power state,
+    /// this immediately returns `None` without accessing hwmon or NVML to
+    /// prevent waking the PCIe device from runtime PM sleep.
     pub fn get_freq_mhz(&self) -> Option<f32> {
-        self.probe_hwmon(read_hwmon_freq, read_nvml_freq)
+        if self.is_dgpu
+            && self.get_runtime_status().unwrap_or(GfxPower::Unknown) != GfxPower::Active
+        {
+            return None;
+        }
+
+        // 1. Direct hwmon directory under device path
+        if let Ok(entries) = fs::read_dir(self.dev_path.join("hwmon")) {
+            for entry in entries.flatten() {
+                if let Some(freq) = read_hwmon_freq(&entry.path()) {
+                    return Some(freq);
+                }
+            }
+        }
+
+        // 2. Global /sys/class/hwmon matching this device's sysfs path
+        if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // This GPU or something under it, never an ancestor bridge
+                let is_match = path
+                    .join("device")
+                    .canonicalize()
+                    .ok()
+                    .is_some_and(|p| p == self.dev_path || p.starts_with(&self.dev_path));
+                if is_match {
+                    if let Some(freq) = read_hwmon_freq(&path) {
+                        return Some(freq);
+                    }
+                }
+            }
+        }
+
+        // 3. Fallback to NVML if this is an NVIDIA device and hwmon is not available
+        if self.pci_id.to_uppercase().starts_with(NVIDIA_PCI_VENDOR) {
+            if let Some(freq) = read_nvml_freq() {
+                return Some(freq);
+            }
+        }
+
+        None
     }
 
     /// Enumerate PCI GPU devices via udev and identify the dGPU.
