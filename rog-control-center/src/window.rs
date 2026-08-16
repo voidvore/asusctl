@@ -36,6 +36,7 @@ struct Inner {
     config: Arc<Mutex<Config>>,
     prefetched_supported: Arc<Option<Vec<i32>>>,
     app_state: Arc<Mutex<AppState>>,
+    is_tuf: bool,
     shortcuts: OnceLock<ShortcutHandle>,
 }
 
@@ -49,11 +50,13 @@ impl WindowController {
         config: Arc<Mutex<Config>>,
         prefetched_supported: Arc<Option<Vec<i32>>>,
         app_state: Arc<Mutex<AppState>>,
+        is_tuf: bool,
     ) -> Self {
         Self(Arc::new(Inner {
             config,
             prefetched_supported,
             app_state,
+            is_tuf,
             shortcuts: OnceLock::new(),
         }))
     }
@@ -106,6 +109,7 @@ impl WindowController {
                 self.0.config.clone(),
                 self.0.prefetched_supported.clone(),
                 self.0.app_state.clone(),
+                self.0.is_tuf,
                 self.0.shortcuts.get().cloned(),
             );
             let app_state = self.0.app_state.clone();
